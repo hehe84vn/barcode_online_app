@@ -1,2 +1,1 @@
-libdmtx0b
-libdmtx-dev
+egwegg
