@@ -391,17 +391,11 @@ def write_eps(path: Path, shapes: ShapeSet, font_path: str, crop: bool = True, w
     lines = []
     page_w_pt = w * MM_TO_PT
     page_h_pt = h * MM_TO_PT
-    bbox_w = math.ceil(page_w_pt)
-    bbox_h = math.ceil(page_h_pt)
-    lines.append("%!PS-Adobe-3.1 EPSF-3.0")
-    lines.append("%ADO_DSC_Encoding: Windows Roman")
-    lines.append("%%Title: Adobe Illustrator Artwork")
-    lines.append("%%Creator: Barcode Online App")
-    lines.append(f"%%BoundingBox: 0 0 {bbox_w} {bbox_h}")
+    lines.append("%!PS-Adobe-3.0 EPSF-3.0")
+    lines.append(f"%%BoundingBox: 0 0 {math.ceil(page_w_pt)} {math.ceil(page_h_pt)}")
     lines.append(f"%%HiResBoundingBox: 0 0 {page_w_pt:.4f} {page_h_pt:.4f}")
     lines.append(f"%%CropBox: 0 0 {page_w_pt:.4f} {page_h_pt:.4f}")
-    lines.append("%%LanguageLevel: 2")
-    lines.append("%%DocumentData: Clean7Bit")
+    lines.append(f"%%DocumentMedia: 50mm_50mm {page_w_pt:.4f} {page_h_pt:.4f} 0 () ()")
     lines.append("%%DocumentProcessColors: Black")
     lines.append("%%EndComments")
     lines.append("/rectfill { 4 dict begin /hh exch def /ww exch def /yy exch def /xx exch def newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto closepath fill end } bind def")
