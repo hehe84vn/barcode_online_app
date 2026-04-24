@@ -57,7 +57,7 @@ def require_login():
     st.markdown(
         f"""
         <div style="text-align:center; margin-bottom: 18px;">
-            <img src="{COMPANY_LOGO_URL}" alt="Spring CC" style="max-width: 180px; height: auto;">
+            <img src="{COMPANY_LOGO_URL}" alt="Spring CC" style="width: 330px; height: 45px; object-fit: contain;">
         </div>
         """,
         unsafe_allow_html=True,
