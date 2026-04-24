@@ -333,41 +333,29 @@ def center_shapes_on_page(
     page_w: float = PAGE_MM,
     page_h: float = PAGE_MM,
 ) -> ShapeSet:
-    """Keep approved artwork size unchanged and only place it at page center.
-
-    This fixes Illustrator artboard/page size at 50mm x 50mm while keeping
-    barcode/DataMatrix artwork exactly at the approved size.
-    """
+    """Keep approved artwork size unchanged and center it on a fixed 50mm x 50mm page."""
     x1, y1, x2, y2 = artwork_bbox(shapes, font_path, pad_mm=0.0)
     artwork_w = max(0.0, x2 - x1)
     artwork_h = max(0.0, y2 - y1)
-
     dx = (page_w - artwork_w) / 2.0 - x1
     dy = (page_h - artwork_h) / 2.0 - y1
-
     rects = [(x + dx, y + dy, w, h) for x, y, w, h in shapes.rects]
     text_parts = [(txt, x + dx, base + dy, size, letter) for txt, x, base, size, letter in shapes.text_parts]
     return ShapeSet(rects, text_parts, page_w, page_h)
 
 
 def _white_background_bbox(shapes: ShapeSet) -> Tuple[float, float, float, float]:
-    """White object behind DataMatrix only, not the full 50mm artboard.
-
-    DataMatrix approved artwork has a 1mm quiet zone around black modules.
-    Therefore, when white_bg=True, draw a white rectangle equal to black-module
-    bbox + 1mm padding. This preserves the approved DataMatrix size when the
-    whole artwork is centered on a 50mm x 50mm artboard.
-    """
+    """White square behind DataMatrix only, preserving the approved 16mm symbol area."""
     rb = _rects_bbox(shapes.rects, pad_mm=1.0)
     if rb is None:
         return (0.0, 0.0, shapes.page_w, shapes.page_h)
-
     x1, y1, x2, y2 = rb
-    x1 = max(0.0, x1)
-    y1 = max(0.0, y1)
-    x2 = min(shapes.page_w, x2)
-    y2 = min(shapes.page_h, y2)
-    return (x1, y1, x2, y2)
+    return (
+        max(0.0, x1),
+        max(0.0, y1),
+        min(shapes.page_w, x2),
+        min(shapes.page_h, y2),
+    )
 
 def write_svg(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = False):
     parts = [
@@ -401,9 +389,13 @@ def write_eps(path: Path, shapes: ShapeSet, font_path: str, crop: bool = True, w
         page_w=w, page_h=h,
     )
     lines = []
+    page_w_pt = w * MM_TO_PT
+    page_h_pt = h * MM_TO_PT
     lines.append("%!PS-Adobe-3.0 EPSF-3.0")
-    lines.append(f"%%BoundingBox: 0 0 {math.ceil(w*MM_TO_PT)} {math.ceil(h*MM_TO_PT)}")
-    lines.append(f"%%HiResBoundingBox: 0 0 {w*MM_TO_PT:.4f} {h*MM_TO_PT:.4f}")
+    lines.append(f"%%BoundingBox: 0 0 {math.ceil(page_w_pt)} {math.ceil(page_h_pt)}")
+    lines.append(f"%%HiResBoundingBox: 0 0 {page_w_pt:.4f} {page_h_pt:.4f}")
+    lines.append(f"%%CropBox: 0 0 {page_w_pt:.4f} {page_h_pt:.4f}")
+    lines.append(f"%%DocumentMedia: 50mm_50mm {page_w_pt:.4f} {page_h_pt:.4f} 0 () ()")
     lines.append("%%DocumentProcessColors: Black")
     lines.append("%%EndComments")
     lines.append("/rectfill { 4 dict begin /hh exch def /ww exch def /yy exch def /xx exch def newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto closepath fill end } bind def")
