@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 MM_TO_PT = 72.0 / 25.4
 
@@ -25,13 +25,7 @@ def _load_font(font_path: str):
 
 
 def _glyph_recording(font_path: str, ch: str) -> GlyphPath:
-    """Record a glyph as real line / quadratic / cubic segments.
-
-    The previous version used RecordingPen directly and treated qCurveTo with
-    multiple off-curve points as one curve. That distorted Arial digits when
-    converted to EPS/PDF outlines. This pen uses BasePen so TrueType quadratic
-    curves are decomposed into proper one-segment qCurveTo commands.
-    """
+    """Record glyph outlines with correct TrueType quadratic segments."""
     from fontTools.pens.basePen import BasePen
 
     class _OutlinePen(BasePen):
@@ -91,7 +85,7 @@ def iter_text_contours_mm(
     font_size_mm: float,
     letter_spacing_mm: float = 0.0,
 ):
-    """Yield glyph outline commands transformed into top-left page millimetres."""
+    """Yield glyph outline commands in top-left millimetre coordinates."""
     _, _, _, units_per_em, _ = _load_font(font_path)
     scale = font_size_mm / float(units_per_em)
     cursor_x = x_mm
@@ -117,6 +111,24 @@ def iter_text_contours_mm(
             elif name == "closePath":
                 yield ("Z", ())
         cursor_x += gp.advance_width * scale + letter_spacing_mm
+
+
+def text_outline_bbox_mm(text: str, font_path: str, x_mm: float, baseline_y_mm: float, font_size_mm: float, letter_spacing_mm: float = 0.0) -> Optional[Tuple[float, float, float, float]]:
+    """Return exact outline control-point bbox in top-left millimetre coordinates."""
+    xs: List[float] = []
+    ys: List[float] = []
+    for cmd, vals in iter_text_contours_mm(text, font_path, x_mm, baseline_y_mm, font_size_mm, letter_spacing_mm):
+        pts = []
+        if cmd in ("M", "L"):
+            pts = [vals]
+        elif cmd in ("C", "Q"):
+            pts = list(vals)
+        for px, py in pts:
+            xs.append(px)
+            ys.append(py)
+    if not xs:
+        return None
+    return min(xs), min(ys), max(xs), max(ys)
 
 
 def text_to_svg_path_d(*args, **kwargs) -> str:
@@ -146,7 +158,6 @@ def text_to_svg_path_d(*args, **kwargs) -> str:
 
 
 def append_text_eps(lines: List[str], text: str, font_path: str, x_mm: float, baseline_y_mm: float, font_size_mm: float, page_h_mm: float, letter_spacing_mm: float = 0.0):
-    """Append text outlines as filled PostScript paths."""
     cur = None
     start = None
     lines.append("newpath")

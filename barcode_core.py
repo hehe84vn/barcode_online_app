@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Iterable, Optional
 
-from vector_font import MM_TO_PT, measure_text_mm, text_to_svg_path_d, append_text_eps, draw_text_pdf
+from vector_font import MM_TO_PT, measure_text_mm, text_outline_bbox_mm, text_to_svg_path_d, append_text_eps, draw_text_pdf
 
 PAGE_MM = 50.0
 DM_SIZE_MM = 16.0
@@ -139,64 +139,56 @@ def _runs(bits: str) -> Iterable[Tuple[int, int, str]]:
 
 
 def barcode_shapes(code: str, kind: str) -> ShapeSet:
-    """Return shapes matching the old flow closely enough for first validation.
+    """Return barcode geometry matching the legacy C# SVG + Illustrator 80% action.
 
-    Coordinates are in mm on a 50mm page. EPS export later crops to artwork bbox.
+    The old tool generated SVG in a pixel-like coordinate system, then Illustrator
+    scaled the artwork to 80% before EPS/PDF export. Recreating that geometry
+    directly avoids the text/bar overlap and bar-weight mismatch from the earlier
+    approximate module-based generator.
     """
-    if kind == "EAN":
-        bits = ean13_bits(code)
-        module = 0.352  # unscaled mm; action scales 80%, old EPS width ~26.75mm
-        bar_h = 21.85
-        guard_h = 23.85
-        x0 = (PAGE_MM - len(bits) * module * BARCODE_SCALE) / 2.0 / BARCODE_SCALE
-        y0 = 12.9 / BARCODE_SCALE
-        text_base = (12.9 + 19.05) / BARCODE_SCALE
-        font_size = 3.05 / BARCODE_SCALE
-        letter = 0.36 / BARCODE_SCALE
-    else:
-        bits = upca_bits(code)
-        module = 0.374  # unscaled mm; action scales 80%, old EPS width ~28.4mm
-        bar_h = 21.85
-        guard_h = 23.85
-        x0 = (PAGE_MM - len(bits) * module * BARCODE_SCALE) / 2.0 / BARCODE_SCALE
-        y0 = 12.9 / BARCODE_SCALE
-        text_base = (12.9 + 19.05) / BARCODE_SCALE
-        font_size = 3.05 / BARCODE_SCALE
-        letter = 0.36 / BARCODE_SCALE
+    px = 25.4 / 72.0 * BARCODE_SCALE
+    start_x_px = 27.05
+    module_px = 0.95
+    top_px = 36.95
+    normal_bottom_px = 98.85001
+    guard_bottom_px = 104.55
 
-    guard_indices = set(list(range(0,3)) + list(range(45,50)) + list(range(92,95)))
+    bits = ean13_bits(code) if kind == "EAN" else upca_bits(code)
+
+    # Guard patterns in the legacy SVG extend lower than normal bars.
+    if kind == "EAN":
+        guard_indices = set(list(range(0, 3)) + list(range(45, 50)) + list(range(92, 95)))
+    else:
+        # UPC-A legacy output extends the start/end guard zones lower; this matches
+        # the old SVG behavior more closely than the generic EAN guard logic.
+        guard_indices = set(list(range(0, 11)) + list(range(45, 50)) + list(range(87, 95)))
+
     rects = []
     for start, length, bit in _runs(bits):
         if bit != "1":
             continue
-        is_guard = any(i in guard_indices for i in range(start, start + length))
-        h = guard_h if is_guard else bar_h
-        rects.append((x0 + start * module, y0, length * module, h))
+        x_px = start_x_px + start * module_px
+        # Legacy SVG uses a slight ink reduction for one-module bars: 0.8px,
+        # while multi-module bars use the full module multiple.
+        w_px = 0.8 if length == 1 else length * module_px
+        bottom_px = guard_bottom_px if any(i in guard_indices for i in range(start, start + length)) else normal_bottom_px
+        rects.append((x_px * px, top_px * px, w_px * px, (bottom_px - top_px) * px))
 
-    # Fine-tuned text layout so the outlined Arial digits sit lower and do not
-    # collide with the barcode bars after the legacy 80% scale is applied.
-    # The values below are calibrated against the approved sample EPS.
+    text_y_px = 106.45
+    text_size_px = 9.0
+    letter_px = 1.14
     text_parts = []
     if kind == "EAN":
-        tuned_base = text_base + 2.70
-        tuned_size = font_size * 0.94
-        tuned_letter = 0.28
-        text_parts.append((code[0], x0 + 0.10, tuned_base + 0.10, tuned_size * 0.875, 0.0))
-        text_parts.append((code[1:7], x0 + 6.0 * module, tuned_base, tuned_size, tuned_letter))
-        text_parts.append((code[7:], x0 + 51.0 * module, tuned_base, tuned_size, tuned_letter))
+        text_parts.append((code[0], 22.05 * px, text_y_px * px, 7.875 * px, 0.0))
+        text_parts.append((code[1:7], 31.34999 * px, text_y_px * px, text_size_px * px, letter_px * px))
+        text_parts.append((code[7:], 74.34999 * px, text_y_px * px, text_size_px * px, letter_px * px))
     else:
-        tuned_base = text_base + 2.70
-        tuned_size = font_size * 0.94
-        tuned_letter = 0.28
-        text_parts.append((code[0], x0 + 0.10, tuned_base + 0.10, tuned_size * 0.875, 0.0))
-        text_parts.append((code[1:6], x0 + 8.0 * module, tuned_base, tuned_size, tuned_letter))
-        text_parts.append((code[6:11], x0 + 53.0 * module, tuned_base, tuned_size, tuned_letter))
-        text_parts.append((code[-1], x0 + 92.0 * module, tuned_base + 0.10, tuned_size * 0.875, 0.0))
+        text_parts.append((code[0], 21.5499992370605 * px, text_y_px * px, 7.2 * px, 0.0))
+        text_parts.append((code[-1], 118.7999 * px, text_y_px * px, 7.2 * px, 0.0))
+        text_parts.append((code[1:6], 39.05 * px, text_y_px * px, text_size_px * px, letter_px * px))
+        text_parts.append((code[6:11], 76.05 * px, text_y_px * px, text_size_px * px, letter_px * px))
 
-    # Apply old Illustrator scale 80% around origin, then recentre visual group by returning transformed shapes.
-    # We scale around page centre for stable page placement; EPS will crop actual artwork.
-    return scale_shapes(ShapeSet(rects, text_parts), BARCODE_SCALE, PAGE_MM/2.0, PAGE_MM/2.0)
-
+    return ShapeSet(rects, text_parts)
 
 def scale_shapes(shapes: ShapeSet, factor: float, cx: float, cy: float) -> ShapeSet:
     def sx(x): return cx + (x - cx) * factor
@@ -299,12 +291,15 @@ def artwork_bbox(shapes: ShapeSet, font_path: Optional[str] = None, pad_mm: floa
     ys = []
     for x,y,w,h in shapes.rects:
         xs += [x, x+w]; ys += [y, y+h]
-    # Text bbox estimate; EPS crop may be refined by Illustrator but this is stable.
+    # Use the actual outlined glyph bbox, not a rough font-size estimate.
+    # This makes EPS HiResBoundingBox match the legacy Illustrator output much better.
     if font_path:
-        for txt,x,base,size,letter in shapes.text_parts:
-            width = measure_text_mm(txt, font_path, size, letter)
-            xs += [x, x+width]
-            ys += [base-size*0.95, base+size*0.25]
+        for txt, x, base, size, letter in shapes.text_parts:
+            tb = text_outline_bbox_mm(txt, font_path, x, base, size, letter)
+            if tb:
+                tx1, ty1, tx2, ty2 = tb
+                xs += [tx1, tx2]
+                ys += [ty1, ty2]
     if not xs:
         return (0,0,0,0)
     return (min(xs)-pad_mm, min(ys)-pad_mm, max(xs)+pad_mm, max(ys)+pad_mm)
