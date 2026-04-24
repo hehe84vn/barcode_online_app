@@ -314,13 +314,15 @@ def artwork_bbox(shapes: ShapeSet, font_path: Optional[str] = None, pad_mm: floa
     return (min(xs)-pad_mm, min(ys)-pad_mm, max(xs)+pad_mm, max(ys)+pad_mm)
 
 
-def write_svg(path: Path, shapes: ShapeSet, font_path: str):
+def write_svg(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = False):
     parts = [
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
         f'<svg xmlns="http://www.w3.org/2000/svg" version="1.1" x="0mm" y="0mm" width="{shapes.page_w:g}mm" height="{shapes.page_h:g}mm" viewBox="0 0 {shapes.page_w:g} {shapes.page_h:g}">',
         '<style>.fill{fill:#000000;}</style>',
         '<g>'
     ]
+    if white_bg:
+        parts.append(f'<rect x="0" y="0" width="{shapes.page_w:g}" height="{shapes.page_h:g}" fill="#FFFFFF"/>')
     for x,y,w,h in shapes.rects:
         parts.append(f'<rect class="fill" x="{x:.4f}" y="{y:.4f}" width="{w:.4f}" height="{h:.4f}"/>')
     for txt,x,base,size,letter in shapes.text_parts:
@@ -330,7 +332,7 @@ def write_svg(path: Path, shapes: ShapeSet, font_path: str):
     path.write_text("\n".join(parts), encoding="utf-8")
 
 
-def write_eps(path: Path, shapes: ShapeSet, font_path: str, crop: bool = True):
+def write_eps(path: Path, shapes: ShapeSet, font_path: str, crop: bool = True, white_bg: bool = False):
     if crop:
         x1,y1,x2,y2 = artwork_bbox(shapes, font_path, pad_mm=0.0)
     else:
@@ -349,6 +351,10 @@ def write_eps(path: Path, shapes: ShapeSet, font_path: str, crop: bool = True):
     lines.append("%%DocumentProcessColors: Black")
     lines.append("%%EndComments")
     lines.append("/rectfill { 4 dict begin /hh exch def /ww exch def /yy exch def /xx exch def newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto closepath fill end } bind def")
+    if white_bg:
+        lines.append("false setoverprint")
+        lines.append("0 0 0 0 setcmykcolor")
+        lines.append(f"0.0000 0.0000 {w*MM_TO_PT:.4f} {h*MM_TO_PT:.4f} rectfill")
     lines.append("true setoverprint")
     lines.append("0 0 0 1 setcmykcolor")
     for x,y,rw,rh in shifted.rects:
@@ -362,12 +368,18 @@ def write_eps(path: Path, shapes: ShapeSet, font_path: str, crop: bool = True):
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def write_pdf(path: Path, shapes: ShapeSet, font_path: str):
+def write_pdf(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = False):
     try:
         from reportlab.pdfgen import canvas
     except Exception as e:
         raise RuntimeError("PDF export cần cài reportlab") from e
     c = canvas.Canvas(str(path), pagesize=(shapes.page_w*MM_TO_PT, shapes.page_h*MM_TO_PT))
+    if white_bg:
+        try:
+            c.setFillColorCMYK(0, 0, 0, 0)
+        except Exception:
+            c.setFillGray(1)
+        c.rect(0, 0, shapes.page_w*MM_TO_PT, shapes.page_h*MM_TO_PT, stroke=0, fill=1)
     # CMYK K100
     try:
         c.setFillColorCMYK(0, 0, 0, 1)
@@ -421,13 +433,13 @@ def generate_row(row: InputRow, batch_root: Path, font_path: str, make_svg=True,
     dm_dir = f"DATAMATRIX_{row.kind}"
     dm_prefix = f"{row.kind}_DATAMATRIX"
     if make_svg:
-        write_svg(batch_root / "svg" / dm_dir / f"{names['dm']}.svg", dm_shapes, font_path)
+        write_svg(batch_root / "svg" / dm_dir / f"{names['dm']}.svg", dm_shapes, font_path, white_bg=True)
     if make_eps:
         # Keep the full 16 x 16 mm page so the quiet zone remains present,
         # matching the legacy Illustrator-exported EPS.
-        write_eps(batch_root / "dist" / dm_dir / f"{dm_prefix}_EPS" / f"{names['dm']}.eps", dm_shapes, font_path, crop=False)
+        write_eps(batch_root / "dist" / dm_dir / f"{dm_prefix}_EPS" / f"{names['dm']}.eps", dm_shapes, font_path, crop=False, white_bg=True)
     if make_pdf:
-        write_pdf(batch_root / "dist" / dm_dir / f"{dm_prefix}_PDF" / f"{names['dm']}.pdf", dm_shapes, font_path)
+        write_pdf(batch_root / "dist" / dm_dir / f"{dm_prefix}_PDF" / f"{names['dm']}.pdf", dm_shapes, font_path, white_bg=True)
 
 
 def zip_folder(src: Path, zip_path: Path):
