@@ -351,10 +351,15 @@ def inject_css():
 
 
 def get_app_password() -> str:
+    """Read password from Streamlit Secrets only.
+
+    Configure in Streamlit Cloud → App settings → Secrets:
+    APP_PASSWORD = "your-password"
+    """
     try:
-        return str(st.secrets.get("APP_PASSWORD", "Springcc2026"))
+        return str(st.secrets["APP_PASSWORD"])
     except Exception:
-        return "Springcc2026"
+        return ""
 
 
 def require_login():
