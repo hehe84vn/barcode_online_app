@@ -173,18 +173,25 @@ def barcode_shapes(code: str, kind: str) -> ShapeSet:
         h = guard_h if is_guard else bar_h
         rects.append((x0 + start * module, y0, length * module, h))
 
+    # Fine-tuned text layout so the outlined Arial digits sit lower and do not
+    # collide with the barcode bars after the legacy 80% scale is applied.
+    # The values below are calibrated against the approved sample EPS.
     text_parts = []
     if kind == "EAN":
-        # EAN-13: first digit outside left, then 6 + 6 digits.
-        text_parts.append((code[0], x0 - 1.90, text_base + 0.02, font_size * 0.875, 0.0))
-        text_parts.append((code[1:7], x0 + 7.0 * module, text_base, font_size, letter))
-        text_parts.append((code[7:], x0 + 52.0 * module, text_base, font_size, letter))
+        tuned_base = text_base + 2.70
+        tuned_size = font_size * 0.94
+        tuned_letter = 0.28
+        text_parts.append((code[0], x0 + 0.10, tuned_base + 0.10, tuned_size * 0.875, 0.0))
+        text_parts.append((code[1:7], x0 + 6.0 * module, tuned_base, tuned_size, tuned_letter))
+        text_parts.append((code[7:], x0 + 51.0 * module, tuned_base, tuned_size, tuned_letter))
     else:
-        # UPC-A: first and last digit slightly smaller/outside, middle groups larger.
-        text_parts.append((code[0], x0 - 1.10, text_base + 0.02, font_size * 0.875, 0.0))
-        text_parts.append((code[1:6], x0 + 9.0 * module, text_base, font_size, letter))
-        text_parts.append((code[6:11], x0 + 54.0 * module, text_base, font_size, letter))
-        text_parts.append((code[-1], x0 + 96.0 * module, text_base + 0.02, font_size * 0.875, 0.0))
+        tuned_base = text_base + 2.70
+        tuned_size = font_size * 0.94
+        tuned_letter = 0.28
+        text_parts.append((code[0], x0 + 0.10, tuned_base + 0.10, tuned_size * 0.875, 0.0))
+        text_parts.append((code[1:6], x0 + 8.0 * module, tuned_base, tuned_size, tuned_letter))
+        text_parts.append((code[6:11], x0 + 53.0 * module, tuned_base, tuned_size, tuned_letter))
+        text_parts.append((code[-1], x0 + 92.0 * module, tuned_base + 0.10, tuned_size * 0.875, 0.0))
 
     # Apply old Illustrator scale 80% around origin, then recentre visual group by returning transformed shapes.
     # We scale around page centre for stable page placement; EPS will crop actual artwork.
