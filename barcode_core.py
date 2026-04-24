@@ -314,19 +314,6 @@ def artwork_bbox(shapes: ShapeSet, font_path: Optional[str] = None, pad_mm: floa
     return (min(xs)-pad_mm, min(ys)-pad_mm, max(xs)+pad_mm, max(ys)+pad_mm)
 
 
-
-
-def center_shapes_on_page(shapes: ShapeSet, font_path: Optional[str], page_w: float = PAGE_MM, page_h: float = PAGE_MM) -> ShapeSet:
-    """Keep artwork size unchanged, but center it on a fixed page/artboard."""
-    x1, y1, x2, y2 = artwork_bbox(shapes, font_path, pad_mm=0.0)
-    bw = max(0.0, x2 - x1)
-    bh = max(0.0, y2 - y1)
-    dx = (page_w - bw) / 2.0 - x1
-    dy = (page_h - bh) / 2.0 - y1
-    rects = [(x + dx, y + dy, w, h) for x, y, w, h in shapes.rects]
-    texts = [(txt, x + dx, base + dy, size, letter) for txt, x, base, size, letter in shapes.text_parts]
-    return ShapeSet(rects, texts, page_w, page_h)
-
 def write_svg(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = False):
     parts = [
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
@@ -434,20 +421,22 @@ def output_names(row: InputRow) -> Dict[str, str]:
 
 def generate_row(row: InputRow, batch_root: Path, font_path: str, make_svg=True, make_eps=True, make_pdf=True):
     names = output_names(row)
-    shapes = center_shapes_on_page(barcode_shapes(row.code, row.kind), font_path, PAGE_MM, PAGE_MM)
+    shapes = barcode_shapes(row.code, row.kind)
     if make_svg:
         write_svg(batch_root / "svg" / row.kind / f"{names['barcode']}.svg", shapes, font_path)
     if make_eps:
-        write_eps(batch_root / "dist" / row.kind / f"{row.kind}_EPS" / f"{names['barcode']}.eps", shapes, font_path, crop=False)
+        write_eps(batch_root / "dist" / row.kind / f"{row.kind}_EPS" / f"{names['barcode']}.eps", shapes, font_path, crop=True)
     if make_pdf:
         write_pdf(batch_root / "dist" / row.kind / f"{row.kind}_PDF" / f"{names['barcode']}.pdf", shapes, font_path)
 
-    dm_shapes = center_shapes_on_page(datamatrix_shapes(row.code), font_path, PAGE_MM, PAGE_MM)
+    dm_shapes = datamatrix_shapes(row.code)
     dm_dir = f"DATAMATRIX_{row.kind}"
     dm_prefix = f"{row.kind}_DATAMATRIX"
     if make_svg:
         write_svg(batch_root / "svg" / dm_dir / f"{names['dm']}.svg", dm_shapes, font_path, white_bg=True)
     if make_eps:
+        # Keep the full 16 x 16 mm page so the quiet zone remains present,
+        # matching the legacy Illustrator-exported EPS.
         write_eps(batch_root / "dist" / dm_dir / f"{dm_prefix}_EPS" / f"{names['dm']}.eps", dm_shapes, font_path, crop=False, white_bg=True)
     if make_pdf:
         write_pdf(batch_root / "dist" / dm_dir / f"{dm_prefix}_PDF" / f"{names['dm']}.pdf", dm_shapes, font_path, white_bg=True)
