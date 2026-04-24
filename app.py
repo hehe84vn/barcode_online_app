@@ -236,6 +236,16 @@ def inject_css():
                 margin-bottom: 18px;
             }
 
+            div[data-testid="stForm"] {
+                max-width: 520px;
+                margin: 0 auto;
+                padding: 20px 22px 18px;
+                border-radius: 20px;
+                border: 1px solid var(--spring-border);
+                background: rgba(255,255,255,0.92);
+                box-shadow: 0 12px 34px rgba(30,32,50,0.05);
+            }
+
             .history-item {
                 background: #fff;
                 border: 1px solid var(--spring-border);
@@ -362,7 +372,7 @@ def require_login():
 
     st.markdown(
         f"""
-        <div class="spring-section-card" style="max-width: 520px; margin: 60px auto 20px; text-align: center;">
+        <div class="spring-section-card" style="max-width: 520px; margin: 48px auto 18px; text-align: center;">
             <img src="{COMPANY_LOGO_URL}" alt="Spring CC" style="width:330px; height:45px; object-fit:contain; margin-bottom: 18px;">
             <h1 style="font-size: 32px; margin-bottom: 6px;">Barcode / DataMatrix Generator</h1>
             <p style="color:#777b8f; margin-top: 0;">{tr("login_caption")}</p>
