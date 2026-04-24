@@ -314,6 +314,61 @@ def artwork_bbox(shapes: ShapeSet, font_path: Optional[str] = None, pad_mm: floa
     return (min(xs)-pad_mm, min(ys)-pad_mm, max(xs)+pad_mm, max(ys)+pad_mm)
 
 
+
+def _rects_bbox(rects: List[Tuple[float, float, float, float]], pad_mm: float = 0.0) -> Optional[Tuple[float, float, float, float]]:
+    """Return bbox for rects only."""
+    if not rects:
+        return None
+    xs = []
+    ys = []
+    for x, y, w, h in rects:
+        xs += [x, x + w]
+        ys += [y, y + h]
+    return (min(xs) - pad_mm, min(ys) - pad_mm, max(xs) + pad_mm, max(ys) + pad_mm)
+
+
+def center_shapes_on_page(
+    shapes: ShapeSet,
+    font_path: Optional[str],
+    page_w: float = PAGE_MM,
+    page_h: float = PAGE_MM,
+) -> ShapeSet:
+    """Keep approved artwork size unchanged and only place it at page center.
+
+    This fixes Illustrator artboard/page size at 50mm x 50mm while keeping
+    barcode/DataMatrix artwork exactly at the approved size.
+    """
+    x1, y1, x2, y2 = artwork_bbox(shapes, font_path, pad_mm=0.0)
+    artwork_w = max(0.0, x2 - x1)
+    artwork_h = max(0.0, y2 - y1)
+
+    dx = (page_w - artwork_w) / 2.0 - x1
+    dy = (page_h - artwork_h) / 2.0 - y1
+
+    rects = [(x + dx, y + dy, w, h) for x, y, w, h in shapes.rects]
+    text_parts = [(txt, x + dx, base + dy, size, letter) for txt, x, base, size, letter in shapes.text_parts]
+    return ShapeSet(rects, text_parts, page_w, page_h)
+
+
+def _white_background_bbox(shapes: ShapeSet) -> Tuple[float, float, float, float]:
+    """White object behind DataMatrix only, not the full 50mm artboard.
+
+    DataMatrix approved artwork has a 1mm quiet zone around black modules.
+    Therefore, when white_bg=True, draw a white rectangle equal to black-module
+    bbox + 1mm padding. This preserves the approved DataMatrix size when the
+    whole artwork is centered on a 50mm x 50mm artboard.
+    """
+    rb = _rects_bbox(shapes.rects, pad_mm=1.0)
+    if rb is None:
+        return (0.0, 0.0, shapes.page_w, shapes.page_h)
+
+    x1, y1, x2, y2 = rb
+    x1 = max(0.0, x1)
+    y1 = max(0.0, y1)
+    x2 = min(shapes.page_w, x2)
+    y2 = min(shapes.page_h, y2)
+    return (x1, y1, x2, y2)
+
 def write_svg(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = False):
     parts = [
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
@@ -322,7 +377,8 @@ def write_svg(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = Fal
         '<g>'
     ]
     if white_bg:
-        parts.append(f'<rect x="0" y="0" width="{shapes.page_w:g}" height="{shapes.page_h:g}" fill="#FFFFFF"/>')
+        bg_x1, bg_y1, bg_x2, bg_y2 = _white_background_bbox(shapes)
+        parts.append(f'<rect x="{bg_x1:.4f}" y="{bg_y1:.4f}" width="{bg_x2-bg_x1:.4f}" height="{bg_y2-bg_y1:.4f}" fill="#FFFFFF"/>')
     for x,y,w,h in shapes.rects:
         parts.append(f'<rect class="fill" x="{x:.4f}" y="{y:.4f}" width="{w:.4f}" height="{h:.4f}"/>')
     for txt,x,base,size,letter in shapes.text_parts:
@@ -352,9 +408,10 @@ def write_eps(path: Path, shapes: ShapeSet, font_path: str, crop: bool = True, w
     lines.append("%%EndComments")
     lines.append("/rectfill { 4 dict begin /hh exch def /ww exch def /yy exch def /xx exch def newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto closepath fill end } bind def")
     if white_bg:
+        bg_x1, bg_y1, bg_x2, bg_y2 = _white_background_bbox(shifted)
         lines.append("false setoverprint")
         lines.append("0 0 0 0 setcmykcolor")
-        lines.append(f"0.0000 0.0000 {w*MM_TO_PT:.4f} {h*MM_TO_PT:.4f} rectfill")
+        lines.append(f"{bg_x1*MM_TO_PT:.4f} {(shifted.page_h-bg_y2)*MM_TO_PT:.4f} {(bg_x2-bg_x1)*MM_TO_PT:.4f} {(bg_y2-bg_y1)*MM_TO_PT:.4f} rectfill")
     lines.append("true setoverprint")
     lines.append("0 0 0 1 setcmykcolor")
     for x,y,rw,rh in shifted.rects:
@@ -375,11 +432,19 @@ def write_pdf(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = Fal
         raise RuntimeError("PDF export cần cài reportlab") from e
     c = canvas.Canvas(str(path), pagesize=(shapes.page_w*MM_TO_PT, shapes.page_h*MM_TO_PT))
     if white_bg:
+        bg_x1, bg_y1, bg_x2, bg_y2 = _white_background_bbox(shapes)
         try:
             c.setFillColorCMYK(0, 0, 0, 0)
         except Exception:
             c.setFillGray(1)
-        c.rect(0, 0, shapes.page_w*MM_TO_PT, shapes.page_h*MM_TO_PT, stroke=0, fill=1)
+        c.rect(
+            bg_x1 * MM_TO_PT,
+            (shapes.page_h - bg_y2) * MM_TO_PT,
+            (bg_x2 - bg_x1) * MM_TO_PT,
+            (bg_y2 - bg_y1) * MM_TO_PT,
+            stroke=0,
+            fill=1,
+        )
     # CMYK K100
     try:
         c.setFillColorCMYK(0, 0, 0, 1)
@@ -421,22 +486,23 @@ def output_names(row: InputRow) -> Dict[str, str]:
 
 def generate_row(row: InputRow, batch_root: Path, font_path: str, make_svg=True, make_eps=True, make_pdf=True):
     names = output_names(row)
-    shapes = barcode_shapes(row.code, row.kind)
+
+    # Barcode: keep approved artwork size, only center it on fixed 50mm x 50mm artboard/page.
+    shapes = center_shapes_on_page(barcode_shapes(row.code, row.kind), font_path, PAGE_MM, PAGE_MM)
     if make_svg:
         write_svg(batch_root / "svg" / row.kind / f"{names['barcode']}.svg", shapes, font_path)
     if make_eps:
-        write_eps(batch_root / "dist" / row.kind / f"{row.kind}_EPS" / f"{names['barcode']}.eps", shapes, font_path, crop=True)
+        write_eps(batch_root / "dist" / row.kind / f"{row.kind}_EPS" / f"{names['barcode']}.eps", shapes, font_path, crop=False)
     if make_pdf:
         write_pdf(batch_root / "dist" / row.kind / f"{row.kind}_PDF" / f"{names['barcode']}.pdf", shapes, font_path)
 
-    dm_shapes = datamatrix_shapes(row.code)
+    # DataMatrix: keep approved symbol + quiet zone + white background, only center it on fixed 50mm x 50mm artboard/page.
+    dm_shapes = center_shapes_on_page(datamatrix_shapes(row.code), font_path, PAGE_MM, PAGE_MM)
     dm_dir = f"DATAMATRIX_{row.kind}"
     dm_prefix = f"{row.kind}_DATAMATRIX"
     if make_svg:
         write_svg(batch_root / "svg" / dm_dir / f"{names['dm']}.svg", dm_shapes, font_path, white_bg=True)
     if make_eps:
-        # Keep the full 16 x 16 mm page so the quiet zone remains present,
-        # matching the legacy Illustrator-exported EPS.
         write_eps(batch_root / "dist" / dm_dir / f"{dm_prefix}_EPS" / f"{names['dm']}.eps", dm_shapes, font_path, crop=False, white_bg=True)
     if make_pdf:
         write_pdf(batch_root / "dist" / dm_dir / f"{dm_prefix}_PDF" / f"{names['dm']}.pdf", dm_shapes, font_path, white_bg=True)
