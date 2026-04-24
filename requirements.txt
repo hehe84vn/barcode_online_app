@@ -4,4 +4,5 @@ openpyxl>=3.1
 fonttools>=4.51
 reportlab>=4.2
 pillow>=10.3
-pylibdmtx~=0.1.10
+numpy>=1.26
+pyStrich>=0.10
