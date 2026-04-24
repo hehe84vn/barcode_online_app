@@ -200,19 +200,57 @@ def scale_shapes(shapes: ShapeSet, factor: float, cx: float, cy: float) -> Shape
 
 
 def datamatrix_modules(data: str) -> List[List[int]]:
-    """Generate a DataMatrix module matrix via pylibdmtx, then sample to modules.
+    """Generate a DataMatrix module matrix without native libdmtx.
 
-    Requires pylibdmtx + libdmtx. Returns 0/1 matrix including the symbol area only.
+    Preferred backend: pyStrich (pure Python + Pillow/Numpy), suitable for
+    Streamlit Cloud because it does not need apt/system package libdmtx.
+    Fallback: pylibdmtx if available.
+    Returns a 0/1 matrix including the rendered DataMatrix symbol area.
     """
+    # Backend 1: pyStrich. This avoids libdmtx native dependency on Streamlit Cloud.
+    try:
+        from pystrich.datamatrix import DataMatrixEncoder
+        encoder = DataMatrixEncoder(data)
+        ascii_matrix = encoder.get_ascii()
+        rows = [line.rstrip() for line in ascii_matrix.splitlines() if line.strip()]
+        if not rows:
+            raise RuntimeError("pyStrich returned empty DataMatrix")
+
+        # pyStrich ASCII uses two characters for one visual module in examples,
+        # typically 'XX' for black and spaces for white. Group by 2 chars.
+        max_len = max(len(r) for r in rows)
+        rows = [r.ljust(max_len) for r in rows]
+        matrix = []
+        for line in rows:
+            row = []
+            for i in range(0, len(line), 2):
+                cell = line[i:i+2]
+                row.append(1 if 'X' in cell else 0)
+            matrix.append(row)
+
+        # Trim fully white quiet-zone rows/cols so the artwork matches old EPS
+        # crop behavior: real DataMatrix artwork is placed at 16mm x 16mm.
+        non_empty_rows = [i for i, row in enumerate(matrix) if any(row)]
+        non_empty_cols = [j for j in range(max(len(r) for r in matrix)) if any(j < len(r) and r[j] for r in matrix)]
+        if not non_empty_rows or not non_empty_cols:
+            raise RuntimeError("pyStrich DataMatrix has no black modules")
+        r1, r2 = min(non_empty_rows), max(non_empty_rows)
+        c1, c2 = min(non_empty_cols), max(non_empty_cols)
+        trimmed = [row[c1:c2+1] for row in matrix[r1:r2+1]]
+        return trimmed
+    except Exception:
+        pass
+
+    # Backend 2: pylibdmtx fallback. This requires native libdmtx and is kept
+    # only for local/VPS environments where libdmtx is installed.
     try:
         from pylibdmtx.pylibdmtx import encode
         from PIL import Image
     except Exception as e:
-        raise RuntimeError("DataMatrix cần cài pylibdmtx + pillow + libdmtx trên server") from e
+        raise RuntimeError("DataMatrix cần pyStrich hoặc pylibdmtx + pillow + libdmtx trên server") from e
 
     enc = encode(data.encode("utf-8"))
     img = Image.frombytes("RGB", (enc.width, enc.height), enc.pixels)
-    # Convert to grayscale and detect bounding box of non-white pixels.
     gray = img.convert("L")
     pix = gray.load()
     xs, ys = [], []
@@ -223,8 +261,6 @@ def datamatrix_modules(data: str) -> List[List[int]]:
     if not xs:
         raise RuntimeError("Không tạo được DataMatrix")
     minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
-    # Determine module pitch from transitions on central row/column. Lib usually renders square blocks.
-    # Fallback: infer symbol side by common DataMatrix square sizes.
     side_px = max(maxx-minx+1, maxy-miny+1)
     candidates = [10,12,14,16,18,20,22,24,26,32,36,40,44,48,52,64,72,80,88,96,104,120,132,144]
     modules = min(candidates, key=lambda n: abs(side_px / n - round(side_px / n)))
@@ -238,7 +274,6 @@ def datamatrix_modules(data: str) -> List[List[int]]:
             row.append(1 if pix[min(max(x,0),gray.width-1), min(max(y,0),gray.height-1)] < 128 else 0)
         matrix.append(row)
     return matrix
-
 
 def datamatrix_shapes(data: str) -> ShapeSet:
     matrix = datamatrix_modules(data)
