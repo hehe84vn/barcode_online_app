@@ -30,6 +30,7 @@ HISTORY_MAX_HOURS = 48
 
 REQUIRED_COLUMNS = ["Communication number", "EAN/UPC", "Product Version no."]
 COMPANY_LOGO_URL = "https://spring-cc.com/_assets/v11/a04d764c1c5ecfe5a14652f59cc5c020ef497847.svg"
+TEMPLATE_PATH = APP_DIR / "templates" / "barcode_template.xlsx"
 
 
 TEXT = {
@@ -78,6 +79,8 @@ TEXT = {
         "history_desc": "Keeps up to 3 latest ZIP files for 48 hours. Files may be removed sooner if the app reboots/redeploys.",
         "history_empty": "No history files yet.",
         "download": "Download",
+        "download_template": "Download Excel template",
+        "template_missing": "Template file is missing: templates/barcode_template.xlsx",
         "no_comm": "Missing Communication number",
         "no_version": "Missing Product Version no.",
     },
@@ -126,6 +129,8 @@ TEXT = {
         "history_desc": "Lưu tối đa 3 file ZIP gần nhất trong 48 giờ. Có thể mất sớm hơn nếu app reboot/redeploy.",
         "history_empty": "Chưa có file history.",
         "download": "Download",
+        "download_template": "Tải file Excel mẫu",
+        "template_missing": "Thiếu file mẫu: templates/barcode_template.xlsx",
         "no_comm": "Thiếu Communication number",
         "no_version": "Thiếu Product Version no.",
     },
@@ -513,11 +518,12 @@ with st.sidebar:
 
     st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
 
-    st.selectbox(
+    st.radio(
         tr("language"),
         options=["EN", "VN"],
         index=0 if st.session_state.lang == "EN" else 1,
         key="lang",
+        horizontal=True,
     )
 
     st.header(tr("settings"))
@@ -533,10 +539,6 @@ with st.sidebar:
     else:
         st.error(tr("font_missing"))
 
-    st.divider()
-    st.write(tr("storage"))
-    st.caption(tr("history_storage"))
-    st.caption(tr("temp_storage"))
 
 st.markdown(
     f"""
@@ -558,10 +560,27 @@ with tab_generate:
             reset_current_session_data()
             st.rerun()
 
+    st.markdown("#### " + tr("upload_excel"))
+
+    template_col, upload_col = st.columns([1.4, 4])
+    with template_col:
+        if TEMPLATE_PATH.exists():
+            with TEMPLATE_PATH.open("rb") as f:
+                st.download_button(
+                    tr("download_template"),
+                    data=f.read(),
+                    file_name="barcode_template.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+        else:
+            st.warning(tr("template_missing"))
+
     uploaded = st.file_uploader(
         tr("upload_excel"),
         type=["xlsx", "xls"],
         key=st.session_state.uploader_key,
+        label_visibility="collapsed",
     )
 
     if uploaded is None:
