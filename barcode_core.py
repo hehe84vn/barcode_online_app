@@ -275,15 +275,24 @@ def datamatrix_modules(data: str) -> List[List[int]]:
     return matrix
 
 def datamatrix_shapes(data: str) -> ShapeSet:
+    """Build DataMatrix artwork to match the legacy Illustrator result.
+
+    The approved EPS keeps a 16 x 16 mm page/bounding box, but the actual black
+    modules sit inside a 1 mm quiet zone on each side. Earlier versions trimmed
+    the quiet zone and expanded the modules to fill the whole 16 mm, which made
+    the output visually larger than the old file.
+    """
     matrix = datamatrix_modules(data)
     n = len(matrix)
-    cell = DM_SIZE_MM / n
+    quiet_mm = 1.0
+    symbol_mm = DM_SIZE_MM - (quiet_mm * 2.0)
+    cell = symbol_mm / n
     rects = []
     for r, row in enumerate(matrix):
         for c, v in enumerate(row):
             if v:
-                rects.append((DM_X_MM + c * cell, DM_Y_MM + r * cell, cell, cell))
-    return ShapeSet(rects, [])
+                rects.append((quiet_mm + c * cell, quiet_mm + r * cell, cell, cell))
+    return ShapeSet(rects, [], DM_SIZE_MM, DM_SIZE_MM)
 
 
 def artwork_bbox(shapes: ShapeSet, font_path: Optional[str] = None, pad_mm: float = 0.0) -> Tuple[float,float,float,float]:
@@ -414,7 +423,9 @@ def generate_row(row: InputRow, batch_root: Path, font_path: str, make_svg=True,
     if make_svg:
         write_svg(batch_root / "svg" / dm_dir / f"{names['dm']}.svg", dm_shapes, font_path)
     if make_eps:
-        write_eps(batch_root / "dist" / dm_dir / f"{dm_prefix}_EPS" / f"{names['dm']}.eps", dm_shapes, font_path, crop=True)
+        # Keep the full 16 x 16 mm page so the quiet zone remains present,
+        # matching the legacy Illustrator-exported EPS.
+        write_eps(batch_root / "dist" / dm_dir / f"{dm_prefix}_EPS" / f"{names['dm']}.eps", dm_shapes, font_path, crop=False)
     if make_pdf:
         write_pdf(batch_root / "dist" / dm_dir / f"{dm_prefix}_PDF" / f"{names['dm']}.pdf", dm_shapes, font_path)
 
