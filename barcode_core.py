@@ -315,6 +315,19 @@ def artwork_bbox(shapes: ShapeSet, font_path: Optional[str] = None, pad_mm: floa
 
 
 
+def _rects_bbox(rects: List[Tuple[float, float, float, float]], pad_mm: float = 0.0) -> Optional[Tuple[float, float, float, float]]:
+    """Return bbox for rects only."""
+    if not rects:
+        return None
+
+    xs = []
+    ys = []
+    for x, y, w, h in rects:
+        xs += [x, x + w]
+        ys += [y, y + h]
+
+    return (min(xs) - pad_mm, min(ys) - pad_mm, max(xs) + pad_mm, max(ys) + pad_mm)
+
 
 def center_shapes_on_page(
     shapes: ShapeSet,
@@ -322,7 +335,7 @@ def center_shapes_on_page(
     page_w: float = PAGE_MM,
     page_h: float = PAGE_MM,
 ) -> ShapeSet:
-    """Giữ nguyên kích thước artwork, chỉ đặt artwork vào giữa page/artboard."""
+    """Keep artwork size unchanged and move it to the center of the page/artboard."""
     x1, y1, x2, y2 = artwork_bbox(shapes, font_path, pad_mm=0.0)
     artwork_w = max(0.0, x2 - x1)
     artwork_h = max(0.0, y2 - y1)
@@ -332,7 +345,28 @@ def center_shapes_on_page(
 
     rects = [(x + dx, y + dy, w, h) for x, y, w, h in shapes.rects]
     text_parts = [(txt, x + dx, base + dy, size, letter) for txt, x, base, size, letter in shapes.text_parts]
+
     return ShapeSet(rects, text_parts, page_w, page_h)
+
+
+def _white_background_bbox(shapes: ShapeSet) -> Tuple[float, float, float, float]:
+    """White background for DataMatrix only, not the whole page/artboard.
+
+    The approved DataMatrix has a 1mm white quiet zone around black modules.
+    This keeps that white square with the DataMatrix when the symbol is centered
+    on a larger page.
+    """
+    rb = _rects_bbox(shapes.rects, pad_mm=1.0)
+    if rb is None:
+        return (0.0, 0.0, shapes.page_w, shapes.page_h)
+
+    x1, y1, x2, y2 = rb
+    return (
+        max(0.0, x1),
+        max(0.0, y1),
+        min(shapes.page_w, x2),
+        min(shapes.page_h, y2),
+    )
 
 def write_svg(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = False):
     parts = [
@@ -342,7 +376,8 @@ def write_svg(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = Fal
         '<g>'
     ]
     if white_bg:
-        parts.append(f'<rect x="0" y="0" width="{shapes.page_w:g}" height="{shapes.page_h:g}" fill="#FFFFFF"/>')
+        bg_x1, bg_y1, bg_x2, bg_y2 = _white_background_bbox(shapes)
+        parts.append(f'<rect x="{bg_x1:.4f}" y="{bg_y1:.4f}" width="{bg_x2-bg_x1:.4f}" height="{bg_y2-bg_y1:.4f}" fill="#FFFFFF"/>')
     for x,y,w,h in shapes.rects:
         parts.append(f'<rect class="fill" x="{x:.4f}" y="{y:.4f}" width="{w:.4f}" height="{h:.4f}"/>')
     for txt,x,base,size,letter in shapes.text_parts:
@@ -372,9 +407,10 @@ def write_eps(path: Path, shapes: ShapeSet, font_path: str, crop: bool = True, w
     lines.append("%%EndComments")
     lines.append("/rectfill { 4 dict begin /hh exch def /ww exch def /yy exch def /xx exch def newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto closepath fill end } bind def")
     if white_bg:
+        bg_x1, bg_y1, bg_x2, bg_y2 = _white_background_bbox(shifted)
         lines.append("false setoverprint")
         lines.append("0 0 0 0 setcmykcolor")
-        lines.append(f"0.0000 0.0000 {w*MM_TO_PT:.4f} {h*MM_TO_PT:.4f} rectfill")
+        lines.append(f"{bg_x1*MM_TO_PT:.4f} {(shifted.page_h-bg_y2)*MM_TO_PT:.4f} {(bg_x2-bg_x1)*MM_TO_PT:.4f} {(bg_y2-bg_y1)*MM_TO_PT:.4f} rectfill")
     lines.append("true setoverprint")
     lines.append("0 0 0 1 setcmykcolor")
     for x,y,rw,rh in shifted.rects:
@@ -395,11 +431,19 @@ def write_pdf(path: Path, shapes: ShapeSet, font_path: str, white_bg: bool = Fal
         raise RuntimeError("PDF export cần cài reportlab") from e
     c = canvas.Canvas(str(path), pagesize=(shapes.page_w*MM_TO_PT, shapes.page_h*MM_TO_PT))
     if white_bg:
+        bg_x1, bg_y1, bg_x2, bg_y2 = _white_background_bbox(shapes)
         try:
             c.setFillColorCMYK(0, 0, 0, 0)
         except Exception:
             c.setFillGray(1)
-        c.rect(0, 0, shapes.page_w*MM_TO_PT, shapes.page_h*MM_TO_PT, stroke=0, fill=1)
+        c.rect(
+            bg_x1 * MM_TO_PT,
+            (shapes.page_h - bg_y2) * MM_TO_PT,
+            (bg_x2 - bg_x1) * MM_TO_PT,
+            (bg_y2 - bg_y1) * MM_TO_PT,
+            stroke=0,
+            fill=1,
+        )
     # CMYK K100
     try:
         c.setFillColorCMYK(0, 0, 0, 1)
@@ -442,7 +486,7 @@ def output_names(row: InputRow) -> Dict[str, str]:
 def generate_row(row: InputRow, batch_root: Path, font_path: str, make_svg=True, make_eps=True, make_pdf=True):
     names = output_names(row)
 
-    # Barcode: giữ nguyên kích thước hiện tại, chỉ đặt vào giữa page 50x50mm.
+    # Barcode: giữ nguyên kích thước hiện tại, chỉ đặt vào giữa page.
     shapes = center_shapes_on_page(barcode_shapes(row.code, row.kind), font_path, PAGE_MM, PAGE_MM)
     if make_svg:
         write_svg(batch_root / "svg" / row.kind / f"{names['barcode']}.svg", shapes, font_path)
@@ -451,7 +495,7 @@ def generate_row(row: InputRow, batch_root: Path, font_path: str, make_svg=True,
     if make_pdf:
         write_pdf(batch_root / "dist" / row.kind / f"{row.kind}_PDF" / f"{names['barcode']}.pdf", shapes, font_path)
 
-    # DataMatrix: giữ nguyên kích thước hiện tại, chỉ đặt vào giữa page 50x50mm.
+    # DataMatrix: giữ nguyên kích thước hiện tại + nền trắng riêng của mã, chỉ đặt vào giữa page.
     dm_shapes = center_shapes_on_page(datamatrix_shapes(row.code), font_path, PAGE_MM, PAGE_MM)
     dm_dir = f"DATAMATRIX_{row.kind}"
     dm_prefix = f"{row.kind}_DATAMATRIX"
