@@ -161,6 +161,62 @@ def inject_css():
                     linear-gradient(180deg, #ffffff 0%, #fbfbfd 100%);
             }
 
+            html, body, [data-testid="stAppViewContainer"], .stApp {
+                color-scheme: light;
+                color: var(--spring-ink);
+            }
+
+            [data-testid="stAppViewContainer"] {
+                background:
+                    radial-gradient(circle at 0% 0%, rgba(255, 50, 24, 0.08), transparent 28%),
+                    linear-gradient(180deg, #ffffff 0%, #fbfbfd 100%);
+            }
+
+            .spring-section-card h1,
+            .spring-section-card h2,
+            .spring-section-card h3,
+            .spring-section-card p,
+            .spring-section-card label {
+                color: var(--spring-ink) !important;
+            }
+
+            .spring-section-card p {
+                color: var(--spring-muted) !important;
+            }
+
+            div[data-testid="stForm"] label,
+            div[data-testid="stTextInput"] label,
+            div[data-testid="stFileUploader"] label,
+            div[data-testid="stNumberInput"] label,
+            div[data-testid="stSelectbox"] label,
+            div[data-testid="stRadio"] label,
+            div[data-testid="stCheckbox"] label {
+                color: var(--spring-ink) !important;
+            }
+
+            div[data-baseweb="input"],
+            div[data-baseweb="select"] > div,
+            input,
+            textarea {
+                background-color: #ffffff !important;
+                color: var(--spring-ink) !important;
+                border-color: #dfe1e8 !important;
+            }
+
+            div[data-baseweb="input"] svg,
+            div[data-baseweb="select"] svg {
+                color: var(--spring-ink) !important;
+                fill: var(--spring-ink) !important;
+            }
+
+            [data-testid="stMarkdownContainer"],
+            [data-testid="stCaptionContainer"],
+            [data-testid="stInfo"],
+            [data-testid="stAlert"] {
+                color: var(--spring-ink);
+            }
+
+
             section[data-testid="stSidebar"] {
                 background: #f4f5f8;
                 border-right: 1px solid var(--spring-border);
@@ -351,15 +407,10 @@ def inject_css():
 
 
 def get_app_password() -> str:
-    """Read password from Streamlit Secrets only.
-
-    Configure in Streamlit Cloud → App settings → Secrets:
-    APP_PASSWORD = "your-password"
-    """
     try:
-        return str(st.secrets["APP_PASSWORD"])
+        return str(st.secrets.get("APP_PASSWORD", "Springcc2026"))
     except Exception:
-        return ""
+        return "Springcc2026"
 
 
 def require_login():
@@ -379,7 +430,7 @@ def require_login():
         f"""
         <div class="spring-section-card" style="max-width: 520px; margin: 48px auto 18px; text-align: center;">
             <img src="{COMPANY_LOGO_URL}" alt="Spring CC" style="width:330px; height:45px; object-fit:contain; margin-bottom: 18px;">
-            <h1 style="font-size: 32px; margin-bottom: 6px;">Barcode / DataMatrix Generator</h1>
+            <h1 style="font-size: 32px; margin-bottom: 6px; color:#2e3142;">Barcode / DataMatrix Generator</h1>
             <p style="color:#777b8f; margin-top: 0;">{tr("login_caption")}</p>
         </div>
         """,
