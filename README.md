@@ -2,6 +2,11 @@
 
 MVP Streamlit app để đọc Excel và xuất SVG / EPS / PDF / ZIP cho EAN-13, UPC-A và DataMatrix.
 
+App có 2 chế độ generate độc lập:
+
+- `Barcode + DataMatrix`: flow EAN/UPC hiện có.
+- `DataMatrix only`: mã hóa nguyên nội dung cột `Data`, dùng `Name` làm nhãn đặt tên file.
+
 ## Cài đặt
 
 ```bash
@@ -26,6 +31,8 @@ streamlit run app.py
 
 ## Excel input
 
+### Barcode + DataMatrix
+
 Cần có 3 cột:
 
 ```text
@@ -33,6 +40,28 @@ Communication number
 EAN/UPC
 Product Version no.
 ```
+
+### DataMatrix only
+
+Cột bắt buộc và tùy chọn:
+
+```text
+Data    (bắt buộc, được mã hóa nguyên vẹn)
+Name    (tùy chọn, nhãn tự do để đặt tên file)
+```
+
+- Header không phân biệt chữ hoa/chữ thường.
+- Nên format cột `Data` là Text trong Excel để giữ số 0 đầu.
+- Không trim hoặc loại bỏ ký tự khỏi payload. App chỉ cảnh báo nếu có khoảng trắng đầu/cuối.
+- Cặp `Name + Data` giống hệt nhau chỉ generate một lần.
+
+Tên file DataMatrix-only có dạng:
+
+```text
+{SAFE_NAME}__{DATA_OR_HASH}_DATAMATRIX.ext
+```
+
+Payload ngắn và an toàn được đưa trực tiếp vào tên file. Payload dài hoặc chứa ký tự đặc biệt dùng hash 8 ký tự; nội dung được mã hóa vẫn giữ nguyên.
 
 ## Output
 
@@ -52,19 +81,29 @@ BARCODE_YYYYMMDD_HHMMSS/
     └── DATAMATRIX_UPC/UPC_DATAMATRIX_EPS, UPC_DATAMATRIX_PDF
 ```
 
+ZIP của chế độ DataMatrix-only gồm:
+
+```text
+DATAMATRIX_YYYYMMDD_HHMMSS/
+├── svg/DATAMATRIX/
+├── dist/DATAMATRIX/DATAMATRIX_EPS/
+├── dist/DATAMATRIX/DATAMATRIX_PDF/
+└── manifest.csv
+```
+
 ## Chuẩn in ấn đang áp dụng
 
 - EPS vector, không raster cho barcode bars và text outline.
 - Fill black: `C0 M0 Y0 K100`.
 - Overprint: `true setoverprint`.
-- PDF page: 50mm x 50mm.
+- Barcode PDF page: 50mm x 50mm.
 - EPS crop theo artwork thật.
 - Barcode EAN/UPC scale mặc định: 80%.
-- DataMatrix artwork mặc định: 16mm x 16mm, đặt trong page 50mm.
+- DataMatrix output hiện tại: page/artwork 16mm x 16mm, có quiet zone 1mm mỗi cạnh.
 
 ## Lưu ý
 
-- Phần DataMatrix cần `pylibdmtx` và native `libdmtx` trên server.
+- Phần DataMatrix ưu tiên `pyStrich` (pure Python). `pylibdmtx` là backend dự phòng.
 - Nếu deploy trên VPS Ubuntu, có thể cần:
 
 ```bash

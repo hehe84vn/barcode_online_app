@@ -27,3 +27,11 @@ Sau khi generate batch mẫu, mở EPS/PDF trong Illustrator/Acrobat và kiểm 
 
 6. **Naming/folder**
    - Tên file và folder cần khớp workflow cũ.
+   - DataMatrix-only: kiểm tra `Name` được sanitize nhưng vẫn dễ nhận biết.
+   - DataMatrix-only: kiểm tra payload ngắn xuất hiện trong tên file; payload dài dùng hash 8 ký tự.
+   - Không có file bị ghi đè khi hai `Name` khác nhau sanitize thành cùng một tên.
+
+7. **DataMatrix-only payload**
+   - Scan đối chiếu với cột `Data`, bao gồm số 0 đầu và ký tự đặc biệt.
+   - Khoảng trắng đầu/cuối phải được cảnh báo và vẫn được mã hóa nguyên vẹn.
+   - Đối chiếu `manifest.csv` với số dòng Excel hợp lệ/lỗi/trùng.

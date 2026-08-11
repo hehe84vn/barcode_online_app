@@ -10,11 +10,15 @@ import pandas as pd
 import streamlit as st
 
 from barcode_core import (
+    DataMatrixInputRow,
     InputRow,
     classify_code,
     clean_code,
+    datamatrix_output_stem,
     validate_code,
+    ensure_datamatrix_only_dirs,
     ensure_dirs,
+    generate_datamatrix_row,
     generate_row,
     zip_folder,
     cleanup_old_jobs,
@@ -31,6 +35,7 @@ HISTORY_MAX_HOURS = 48
 REQUIRED_COLUMNS = ["Communication number", "EAN/UPC", "Product Version no."]
 COMPANY_LOGO_URL = "https://spring-cc.com/_assets/v11/a04d764c1c5ecfe5a14652f59cc5c020ef497847.svg"
 TEMPLATE_PATH = APP_DIR / "templates" / "barcode_template.xlsx"
+DATAMATRIX_TEMPLATE_PATH = APP_DIR / "templates" / "datamatrix_template.xlsx"
 
 
 TEXT = {
@@ -56,6 +61,8 @@ TEXT = {
         "logout": "Logout",
         "language": "Language",
         "generate": "Generate",
+        "barcode_mode": "Barcode + DataMatrix",
+        "datamatrix_only": "DataMatrix only",
         "history": "History",
         "clear_data": "Clear data",
         "clear_help": "Clear current upload and temp job for this session. History is not deleted.",
@@ -81,8 +88,17 @@ TEXT = {
         "download": "Download",
         "download_template": "Download Excel template",
         "template_missing": "Template file is missing: templates/barcode_template.xlsx",
+        "dm_template_missing": "Template file is missing: templates/datamatrix_template.xlsx",
         "no_comm": "Missing Communication number",
         "no_version": "Missing Product Version no.",
+        "dm_help": "Required column: Data. Optional column: Name. Headers are case-insensitive.",
+        "dm_missing_data": "Missing Data",
+        "dm_duplicate": "Duplicate Name + Data",
+        "dm_outer_space": "OK · Data includes leading/trailing whitespace",
+        "errors": "Errors",
+        "duplicates": "Duplicates",
+        "output_filename": "Output filename",
+        "excel_row": "Excel row",
     },
     "VN": {
         "app_title": "Barcode / DataMatrix Generator",
@@ -106,6 +122,8 @@ TEXT = {
         "logout": "Đăng xuất",
         "language": "Ngôn ngữ",
         "generate": "Generate",
+        "barcode_mode": "Barcode + DataMatrix",
+        "datamatrix_only": "Chỉ tạo DataMatrix",
         "history": "History",
         "clear_data": "Clear data",
         "clear_help": "Xoá dữ liệu upload hiện tại và job tạm của phiên này. Không xoá History.",
@@ -131,8 +149,17 @@ TEXT = {
         "download": "Download",
         "download_template": "Tải file Excel mẫu",
         "template_missing": "Thiếu file mẫu: templates/barcode_template.xlsx",
+        "dm_template_missing": "Thiếu file mẫu: templates/datamatrix_template.xlsx",
         "no_comm": "Thiếu Communication number",
         "no_version": "Thiếu Product Version no.",
+        "dm_help": "Cột bắt buộc: Data. Cột tùy chọn: Name. Không phân biệt chữ hoa/chữ thường ở tiêu đề.",
+        "dm_missing_data": "Thiếu Data",
+        "dm_duplicate": "Trùng Name + Data",
+        "dm_outer_space": "OK · Data có khoảng trắng ở đầu/cuối",
+        "errors": "Lỗi",
+        "duplicates": "Trùng",
+        "output_filename": "Tên file đầu ra",
+        "excel_row": "Dòng Excel",
     },
 }
 
@@ -140,6 +167,14 @@ TEXT = {
 def tr(key: str) -> str:
     lang = st.session_state.get("lang", "EN")
     return TEXT.get(lang, TEXT["EN"]).get(key, key)
+
+
+def find_excel_column(df: pd.DataFrame, expected: str):
+    """Find a column after trimming and case-folding its header."""
+    matches = [column for column in df.columns if str(column).strip().casefold() == expected.casefold()]
+    if len(matches) > 1:
+        raise ValueError(f"Duplicate Excel header: {expected}")
+    return matches[0] if matches else None
 
 
 def inject_css():
@@ -548,6 +583,7 @@ def reset_current_session_data():
 
     st.session_state.current_job_dir = None
     st.session_state.uploader_key = f"uploader_{uuid.uuid4().hex[:8]}"
+    st.session_state.dm_uploader_key = f"dm_uploader_{uuid.uuid4().hex[:8]}"
 
 
 require_login()
@@ -560,6 +596,9 @@ cleanup_history()
 
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = "uploader_0"
+
+if "dm_uploader_key" not in st.session_state:
+    st.session_state.dm_uploader_key = "dm_uploader_0"
 
 if "current_job_dir" not in st.session_state:
     st.session_state.current_job_dir = None
@@ -617,7 +656,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_generate, tab_history = st.tabs([tr("generate"), tr("history")])
+tab_generate, tab_datamatrix, tab_history = st.tabs(
+    [tr("barcode_mode"), tr("datamatrix_only"), tr("history")]
+)
 
 with tab_generate:
     action_col1, action_col2 = st.columns([1, 5])
@@ -761,6 +802,209 @@ with tab_generate:
 
                 st.info(tr("history_saved").format(name=history_path.name))
                 st.caption(tr("history_caption"))
+
+
+with tab_datamatrix:
+    action_col1, action_col2 = st.columns([1, 5])
+    with action_col1:
+        if st.button(tr("clear_data"), help=tr("clear_help"), use_container_width=True, key="clear_dm_data"):
+            reset_current_session_data()
+            st.rerun()
+
+    st.markdown("#### " + tr("upload_excel"))
+    st.caption(tr("dm_help"))
+
+    template_col, upload_col = st.columns([1.4, 4])
+    with template_col:
+        if DATAMATRIX_TEMPLATE_PATH.exists():
+            with DATAMATRIX_TEMPLATE_PATH.open("rb") as f:
+                st.download_button(
+                    tr("download_template"),
+                    data=f.read(),
+                    file_name="datamatrix_template.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="download_dm_template",
+                )
+        else:
+            st.warning(tr("dm_template_missing"))
+
+    dm_uploaded = st.file_uploader(
+        tr("upload_excel"),
+        type=["xlsx", "xls"],
+        key=st.session_state.dm_uploader_key,
+        label_visibility="collapsed",
+    )
+
+    if dm_uploaded is None:
+        st.info(tr("upload_start"))
+    else:
+        if not FONT_PATH.exists():
+            st.warning(tr("font_warning"))
+
+        try:
+            dm_df = pd.read_excel(dm_uploaded, dtype=str, keep_default_na=False)
+            data_column = find_excel_column(dm_df, "Data")
+            name_column = find_excel_column(dm_df, "Name")
+        except Exception as e:
+            st.error(f"{tr('excel_read_error')}: {e}")
+            dm_df = None
+            data_column = None
+            name_column = None
+
+        if dm_df is not None and data_column is None:
+            st.error(tr("missing_cols") + "Data")
+        elif dm_df is not None:
+            dm_work = pd.DataFrame({
+                tr("excel_row"): dm_df.index + 2,
+                "Data": dm_df[data_column].astype(str),
+                "Name": dm_df[name_column].astype(str) if name_column is not None else "",
+            })
+            dm_work = dm_work[
+                ~((dm_work["Data"] == "") & (dm_work["Name"] == ""))
+            ].copy()
+
+            statuses = []
+            output_stems = []
+            seen_pairs = set()
+            used_stems = set()
+
+            for _, record in dm_work.iterrows():
+                source_row = int(record[tr("excel_row")])
+                payload = str(record["Data"])
+                name = str(record["Name"])
+                stem = datamatrix_output_stem(name, payload, source_row)
+
+                if not payload.strip():
+                    statuses.append(tr("dm_missing_data"))
+                    output_stems.append("")
+                    continue
+
+                pair_key = (name.strip().casefold(), payload)
+                if pair_key in seen_pairs:
+                    statuses.append(tr("dm_duplicate"))
+                    output_stems.append("")
+                    continue
+
+                # Sanitization can make two different labels converge. Keep
+                # both records by adding the stable source-row suffix.
+                stem_key = stem.casefold()
+                if stem_key in used_stems:
+                    base_stem = stem.removesuffix("_DATAMATRIX")
+                    stem = f"{base_stem}__R{source_row:04d}_DATAMATRIX"
+                    stem_key = stem.casefold()
+                    collision_index = 2
+                    while stem_key in used_stems:
+                        stem = f"{base_stem}__R{source_row:04d}_{collision_index}_DATAMATRIX"
+                        stem_key = stem.casefold()
+                        collision_index += 1
+
+                seen_pairs.add(pair_key)
+                used_stems.add(stem_key)
+                statuses.append(tr("dm_outer_space") if payload != payload.strip() else "OK")
+                output_stems.append(stem)
+
+            dm_work[tr("output_filename")] = output_stems
+            dm_work["Status"] = statuses
+
+            dm_valid_mask = dm_work["Status"].astype(str).str.startswith("OK")
+            dm_valid = dm_work[dm_valid_mask].copy()
+            dm_invalid = dm_work[~dm_valid_mask].copy()
+            duplicate_count = int((dm_work["Status"] == tr("dm_duplicate")).sum())
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric(tr("total_rows"), len(dm_work))
+            c2.metric(tr("valid"), len(dm_valid))
+            c3.metric(tr("errors"), len(dm_invalid))
+            c4.metric(tr("duplicates"), duplicate_count)
+
+            if len(dm_work) > max_rows:
+                st.error(tr("too_many_rows").format(n=len(dm_work), max_rows=max_rows))
+            else:
+                with st.expander(tr("preview"), expanded=True):
+                    st.dataframe(dm_work, use_container_width=True)
+
+                if len(dm_invalid):
+                    st.warning(tr("invalid_warning").format(n=len(dm_invalid)))
+
+                if len(dm_valid) > 0:
+                    if st.button(
+                        tr("generate_zip"),
+                        type="primary",
+                        disabled=not FONT_PATH.exists(),
+                        key="generate_dm_zip",
+                    ):
+                        batch_name = "DATAMATRIX_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+                        job_id = uuid.uuid4().hex[:8]
+                        job_dir = JOBS_DIR / f"job_{batch_name}_{job_id}"
+                        batch_root = job_dir / batch_name
+                        ensure_datamatrix_only_dirs(batch_root)
+                        st.session_state.current_job_dir = str(job_dir)
+
+                        progress = st.progress(0)
+                        log = st.empty()
+                        errors = []
+
+                        rows = []
+                        for _, record in dm_valid.iterrows():
+                            rows.append(DataMatrixInputRow(
+                                name=str(record["Name"]),
+                                data=str(record["Data"]),
+                                output_stem=str(record[tr("output_filename")]),
+                                source_row=int(record[tr("excel_row")]),
+                            ))
+
+                        manifest = dm_work.copy()
+                        for i, row in enumerate(rows, start=1):
+                            try:
+                                log.write(tr("processing").format(i=i, total=len(rows), item=row.output_stem))
+                                generate_datamatrix_row(
+                                    row,
+                                    batch_root,
+                                    str(FONT_PATH),
+                                    make_svg=make_svg,
+                                    make_eps=make_eps,
+                                    make_pdf=make_pdf,
+                                )
+                            except Exception as e:
+                                errors.append(f"{row.output_stem}: {e}")
+                                manifest.loc[
+                                    manifest[tr("excel_row")] == row.source_row,
+                                    "Status",
+                                ] = f"Generate error: {e}"
+                            progress.progress(i / len(rows))
+
+                        manifest.to_csv(batch_root / "manifest.csv", index=False, encoding="utf-8-sig")
+                        zip_path = job_dir / f"{batch_name}.zip"
+                        zip_folder(batch_root, zip_path)
+
+                        zip_data = zip_path.read_bytes()
+                        history_path = save_zip_to_history(zip_path)
+
+                        try:
+                            shutil.rmtree(job_dir, ignore_errors=True)
+                        except Exception:
+                            pass
+                        st.session_state.current_job_dir = None
+
+                        if errors:
+                            st.error(tr("some_errors"))
+                            st.code("\n".join(errors[:50]))
+                        else:
+                            st.success(tr("done"))
+
+                        st.download_button(
+                            tr("download_zip"),
+                            data=zip_data,
+                            file_name=f"{batch_name}.zip",
+                            mime="application/zip",
+                            type="primary",
+                            key="download_generated_dm_zip",
+                        )
+
+                        st.info(tr("history_saved").format(name=history_path.name))
+                        st.caption(tr("history_caption"))
+
 
 with tab_history:
     render_history()

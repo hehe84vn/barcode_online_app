@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import math
 import os
 import re
 import shutil
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -45,6 +47,14 @@ class InputRow:
     version: str
     kind: str  # EAN / UPC
 
+
+@dataclass
+class DataMatrixInputRow:
+    name: str
+    data: str
+    output_stem: str
+    source_row: int
+
 @dataclass
 class ShapeSet:
     rects: List[Tuple[float, float, float, float]]  # x,y,w,h in mm top-left coordinates
@@ -60,6 +70,42 @@ def clean_code(value) -> str:
     if s.endswith(".0") and s[:-2].isdigit():
         s = s[:-2]
     return re.sub(r"\D", "", s)
+
+
+def sanitize_filename_component(value, fallback: str = "DATAMATRIX", max_length: int = 80) -> str:
+    """Return a readable, cross-platform filename component.
+
+    Name is deliberately treated as a free-form label. No project-specific
+    structure (for example BIB / LID / V39) is parsed or required.
+    """
+    text = unicodedata.normalize("NFKC", "" if value is None else str(value)).strip()
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", text)
+    text = re.sub(r"\s+", "_", text)
+    text = re.sub(r"_+", "_", text).strip(" ._")
+    text = text[:max_length].rstrip(" ._")
+
+    # Windows reserves these basenames even when an extension is present.
+    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+    if not text:
+        text = fallback
+    if text.upper() in reserved:
+        text = f"_{text}"
+    return text
+
+
+def datamatrix_data_discriminator(data: str) -> str:
+    """Use short safe data directly; otherwise use a stable payload hash."""
+    payload = "" if data is None else str(data)
+    if re.fullmatch(r"[A-Za-z0-9._-]{1,32}", payload) and not payload.endswith((".", " ")):
+        return payload
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8].upper()
+
+
+def datamatrix_output_stem(name: str, data: str, source_row: int) -> str:
+    fallback = f"ROW_{source_row:04d}"
+    safe_name = sanitize_filename_component(name, fallback=fallback)
+    discriminator = datamatrix_data_discriminator(data)
+    return f"{safe_name}__{discriminator}_DATAMATRIX"
 
 
 def ean13_check_digit(first12: str) -> str:
@@ -411,6 +457,16 @@ def ensure_dirs(root: Path):
         (root/d).mkdir(parents=True, exist_ok=True)
 
 
+def ensure_datamatrix_only_dirs(root: Path):
+    dirs = [
+        "svg/DATAMATRIX",
+        "dist/DATAMATRIX/DATAMATRIX_EPS",
+        "dist/DATAMATRIX/DATAMATRIX_PDF",
+    ]
+    for d in dirs:
+        (root / d).mkdir(parents=True, exist_ok=True)
+
+
 def output_names(row: InputRow) -> Dict[str, str]:
     prefix = f"{row.communication}_{row.version}_{row.kind}"
     return {
@@ -445,6 +501,35 @@ def generate_row(row: InputRow, batch_root: Path, font_path: str, make_svg=True,
         write_eps(batch_root / "dist" / dm_dir / f"{dm_prefix}_EPS" / f"{names['dm']}.eps", dm_shapes, font_path, crop=False, white_bg=True)
     if make_pdf:
         write_pdf(batch_root / "dist" / dm_dir / f"{dm_prefix}_PDF" / f"{names['dm']}.pdf", dm_shapes, font_path, white_bg=True)
+
+
+def generate_datamatrix_row(
+    row: DataMatrixInputRow,
+    batch_root: Path,
+    font_path: str,
+    make_svg: bool = True,
+    make_eps: bool = True,
+    make_pdf: bool = True,
+):
+    """Generate one DataMatrix-only record using the approved vector pipeline."""
+    dm_shapes = datamatrix_shapes(row.data)
+    if make_svg:
+        write_svg(batch_root / "svg" / "DATAMATRIX" / f"{row.output_stem}.svg", dm_shapes, font_path, white_bg=True)
+    if make_eps:
+        write_eps(
+            batch_root / "dist" / "DATAMATRIX" / "DATAMATRIX_EPS" / f"{row.output_stem}.eps",
+            dm_shapes,
+            font_path,
+            crop=False,
+            white_bg=True,
+        )
+    if make_pdf:
+        write_pdf(
+            batch_root / "dist" / "DATAMATRIX" / "DATAMATRIX_PDF" / f"{row.output_stem}.pdf",
+            dm_shapes,
+            font_path,
+            white_bg=True,
+        )
 
 
 def zip_folder(src: Path, zip_path: Path):
