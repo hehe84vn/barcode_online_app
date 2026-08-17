@@ -54,6 +54,18 @@ class DataMatrixInputRow:
     data: str
     output_stem: str
     source_row: int
+    symbol_size: int = 12
+
+
+class DataMatrixCapacityError(ValueError):
+    def __init__(self, symbol_size: int, required_codewords: int, capacity_codewords: int):
+        self.symbol_size = symbol_size
+        self.required_codewords = required_codewords
+        self.capacity_codewords = capacity_codewords
+        super().__init__(
+            f"Data requires {required_codewords} codewords, but "
+            f"DataMatrix {symbol_size}x{symbol_size} holds {capacity_codewords}"
+        )
 
 @dataclass
 class ShapeSet:
@@ -101,11 +113,12 @@ def datamatrix_data_discriminator(data: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8].upper()
 
 
-def datamatrix_output_stem(name: str, data: str, source_row: int) -> str:
+def datamatrix_output_stem(name: str, data: str, source_row: int, symbol_size: Optional[int] = None) -> str:
     fallback = f"ROW_{source_row:04d}"
     safe_name = sanitize_filename_component(name, fallback=fallback)
     discriminator = datamatrix_data_discriminator(data)
-    return f"{safe_name}__{discriminator}_DATAMATRIX"
+    size_suffix = f"__{symbol_size}X{symbol_size}" if symbol_size in (12, 14) else ""
+    return f"{safe_name}__{discriminator}{size_suffix}_DATAMATRIX"
 
 
 def ean13_check_digit(first12: str) -> str:
@@ -244,7 +257,84 @@ def scale_shapes(shapes: ShapeSet, factor: float, cx: float, cy: float) -> Shape
     return ShapeSet(rects, texts, shapes.page_w, shapes.page_h)
 
 
-def datamatrix_modules(data: str) -> List[List[int]]:
+DM_FIXED_SPECS = {
+    12: {"data_words": 5, "error_words": 7, "mapping_size": 10},
+    14: {"data_words": 8, "error_words": 10, "mapping_size": 12},
+}
+
+
+def _randomise_datamatrix_pad(position: int) -> int:
+    pseudo_random = ((149 * position) % 253) + 1
+    value = 129 + pseudo_random
+    return value if value <= 254 else value - 254
+
+
+def _fixed_pystrich_datamatrix_modules(data: str, symbol_size: int) -> List[List[int]]:
+    """Encode an exact 12x12 or 14x14 ECC200 symbol with pyStrich 0.19.
+
+    pyStrich intentionally auto-selects symbol size in its public encoder. This
+    uses its ECC200 high-level encoder, Reed-Solomon implementation, placement,
+    and renderer while selecting the requested standard symbol capacity before
+    padding. The payload itself is never padded with visible characters.
+    """
+    if symbol_size not in DM_FIXED_SPECS:
+        raise ValueError("DataMatrix symbol size must be 12 or 14")
+
+    try:
+        from types import SimpleNamespace
+        from pystrich.datamatrix import DataMatrixData
+        from pystrich.datamatrix.placement import DataMatrixPlacer
+        from pystrich.datamatrix.renderer import DataMatrixRenderer
+        from pystrich.datamatrix.textencoder import TextEncoder
+    except Exception as e:
+        raise RuntimeError("DataMatrix 12x12/14x14 requires pyStrich 0.19") from e
+
+    spec = DM_FIXED_SPECS[symbol_size]
+    capacity = spec["data_words"]
+
+    encoder = TextEncoder()
+    encoder.encode_text(DataMatrixData(data, auto_encoding=True))
+
+    # ECC200 allows a trailing unlatch (254) to be omitted when that makes the
+    # selected symbol an exact fit. This mirrors pyStrich's automatic selector.
+    if (
+        len(encoder.codewords) == capacity + 1
+        and encoder.codewords
+        and encoder.codewords[-1] == 254
+    ):
+        encoder.codewords.pop()
+
+    required = len(encoder.codewords)
+    if required > capacity:
+        raise DataMatrixCapacityError(symbol_size, required, capacity)
+
+    pad_count = capacity - required
+    if pad_count:
+        encoder.codewords.append(129)
+    for index in range(1, pad_count):
+        encoder.codewords.append(_randomise_datamatrix_pad(required + index + 1))
+
+    encoder.spec = SimpleNamespace(
+        data_words=capacity,
+        error_words=spec["error_words"],
+        rs_blocks=1,
+    )
+    encoder.append_error_codes()
+
+    mapping_size = spec["mapping_size"]
+    mapping_matrix = [[None] * mapping_size for _ in range(mapping_size)]
+    DataMatrixPlacer().place(encoder.codewords, mapping_matrix)
+
+    # The renderer adds the ECC200 finder/timing border. Quiet zone remains a
+    # physical 1 mm margin in datamatrix_shapes(), as in the approved app.
+    rendered = DataMatrixRenderer(mapping_matrix, (1, 1), quiet_zone=0).matrix
+    matrix = [[1 if cell else 0 for cell in row] for row in rendered]
+    if len(matrix) != symbol_size or any(len(row) != symbol_size for row in matrix):
+        raise RuntimeError(f"pyStrich returned an invalid {symbol_size}x{symbol_size} matrix")
+    return matrix
+
+
+def datamatrix_modules(data: str, symbol_size: Optional[int] = None) -> List[List[int]]:
     """Generate a DataMatrix module matrix without native libdmtx.
 
     Preferred backend: pyStrich (pure Python + Pillow/Numpy), suitable for
@@ -252,6 +342,9 @@ def datamatrix_modules(data: str) -> List[List[int]]:
     Fallback: pylibdmtx if available.
     Returns a 0/1 matrix including the rendered DataMatrix symbol area.
     """
+    if symbol_size is not None:
+        return _fixed_pystrich_datamatrix_modules(data, symbol_size)
+
     # Backend 1: pyStrich. This avoids libdmtx native dependency on Streamlit Cloud.
     try:
         from pystrich.datamatrix import DataMatrixEncoder
@@ -320,7 +413,7 @@ def datamatrix_modules(data: str) -> List[List[int]]:
         matrix.append(row)
     return matrix
 
-def datamatrix_shapes(data: str) -> ShapeSet:
+def datamatrix_shapes(data: str, symbol_size: Optional[int] = None) -> ShapeSet:
     """Build DataMatrix artwork to match the legacy Illustrator result.
 
     The approved EPS keeps a 16 x 16 mm page/bounding box, but the actual black
@@ -328,7 +421,7 @@ def datamatrix_shapes(data: str) -> ShapeSet:
     the quiet zone and expanded the modules to fill the whole 16 mm, which made
     the output visually larger than the old file.
     """
-    matrix = datamatrix_modules(data)
+    matrix = datamatrix_modules(data, symbol_size=symbol_size)
     n = len(matrix)
     quiet_mm = 1.0
     symbol_mm = DM_SIZE_MM - (quiet_mm * 2.0)
@@ -512,7 +605,7 @@ def generate_datamatrix_row(
     make_pdf: bool = True,
 ):
     """Generate one DataMatrix-only record using the approved vector pipeline."""
-    dm_shapes = datamatrix_shapes(row.data)
+    dm_shapes = datamatrix_shapes(row.data, symbol_size=row.symbol_size)
     if make_svg:
         write_svg(batch_root / "svg" / "DATAMATRIX" / f"{row.output_stem}.svg", dm_shapes, font_path, white_bg=True)
     if make_eps:

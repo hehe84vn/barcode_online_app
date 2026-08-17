@@ -10,10 +10,12 @@ import pandas as pd
 import streamlit as st
 
 from barcode_core import (
+    DataMatrixCapacityError,
     DataMatrixInputRow,
     InputRow,
     classify_code,
     clean_code,
+    datamatrix_modules,
     datamatrix_output_stem,
     validate_code,
     ensure_datamatrix_only_dirs,
@@ -92,6 +94,11 @@ TEXT = {
         "no_comm": "Missing Communication number",
         "no_version": "Missing Product Version no.",
         "dm_help": "Required column: Data. Optional column: Name. Headers are case-insensitive.",
+        "dm_symbol_size": "DataMatrix symbol size",
+        "dm_symbol_help": "12×12: up to 10 numeric digits. 14×14: up to 16 numeric digits. Other content may have lower capacity.",
+        "dm_symbol_column": "Symbol size",
+        "dm_too_long": "Data needs {required} codewords; {size}×{size} allows {capacity}",
+        "dm_encode_error": "Cannot encode Data",
         "dm_missing_data": "Missing Data",
         "dm_duplicate": "Duplicate Name + Data",
         "dm_outer_space": "OK · Data includes leading/trailing whitespace",
@@ -153,6 +160,11 @@ TEXT = {
         "no_comm": "Thiếu Communication number",
         "no_version": "Thiếu Product Version no.",
         "dm_help": "Cột bắt buộc: Data. Cột tùy chọn: Name. Không phân biệt chữ hoa/chữ thường ở tiêu đề.",
+        "dm_symbol_size": "Kích thước symbol DataMatrix",
+        "dm_symbol_help": "12×12: tối đa 10 chữ số. 14×14: tối đa 16 chữ số. Nội dung khác có thể có dung lượng thấp hơn.",
+        "dm_symbol_column": "Kích thước symbol",
+        "dm_too_long": "Data cần {required} codewords; {size}×{size} chỉ chứa {capacity}",
+        "dm_encode_error": "Không thể mã hóa Data",
         "dm_missing_data": "Thiếu Data",
         "dm_duplicate": "Trùng Name + Data",
         "dm_outer_space": "OK · Data có khoảng trắng ở đầu/cuối",
@@ -814,6 +826,15 @@ with tab_datamatrix:
     st.markdown("#### " + tr("upload_excel"))
     st.caption(tr("dm_help"))
 
+    dm_symbol_size = st.radio(
+        tr("dm_symbol_size"),
+        options=[12, 14],
+        format_func=lambda size: f"{size} × {size} modules",
+        horizontal=True,
+        key="dm_symbol_size",
+    )
+    st.caption(tr("dm_symbol_help"))
+
     template_col, upload_col = st.columns([1.4, 4])
     with template_col:
         if DATAMATRIX_TEMPLATE_PATH.exists():
@@ -873,7 +894,7 @@ with tab_datamatrix:
                 source_row = int(record[tr("excel_row")])
                 payload = str(record["Data"])
                 name = str(record["Name"])
-                stem = datamatrix_output_stem(name, payload, source_row)
+                stem = datamatrix_output_stem(name, payload, source_row, dm_symbol_size)
 
                 if not payload.strip():
                     statuses.append(tr("dm_missing_data"))
@@ -883,6 +904,21 @@ with tab_datamatrix:
                 pair_key = (name.strip().casefold(), payload)
                 if pair_key in seen_pairs:
                     statuses.append(tr("dm_duplicate"))
+                    output_stems.append("")
+                    continue
+
+                try:
+                    datamatrix_modules(payload, symbol_size=dm_symbol_size)
+                except DataMatrixCapacityError as e:
+                    statuses.append(tr("dm_too_long").format(
+                        required=e.required_codewords,
+                        size=e.symbol_size,
+                        capacity=e.capacity_codewords,
+                    ))
+                    output_stems.append("")
+                    continue
+                except Exception as e:
+                    statuses.append(f"{tr('dm_encode_error')}: {e}")
                     output_stems.append("")
                     continue
 
@@ -905,6 +941,7 @@ with tab_datamatrix:
                 output_stems.append(stem)
 
             dm_work[tr("output_filename")] = output_stems
+            dm_work[tr("dm_symbol_column")] = f"{dm_symbol_size} × {dm_symbol_size}"
             dm_work["Status"] = statuses
 
             dm_valid_mask = dm_work["Status"].astype(str).str.startswith("OK")
@@ -934,7 +971,10 @@ with tab_datamatrix:
                         disabled=not FONT_PATH.exists(),
                         key="generate_dm_zip",
                     ):
-                        batch_name = "DATAMATRIX_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+                        batch_name = (
+                            f"DATAMATRIX_{dm_symbol_size}X{dm_symbol_size}_"
+                            + datetime.now().strftime("%Y%m%d_%H%M%S")
+                        )
                         job_id = uuid.uuid4().hex[:8]
                         job_dir = JOBS_DIR / f"job_{batch_name}_{job_id}"
                         batch_root = job_dir / batch_name
@@ -952,6 +992,7 @@ with tab_datamatrix:
                                 data=str(record["Data"]),
                                 output_stem=str(record[tr("output_filename")]),
                                 source_row=int(record[tr("excel_row")]),
+                                symbol_size=dm_symbol_size,
                             ))
 
                         manifest = dm_work.copy()
